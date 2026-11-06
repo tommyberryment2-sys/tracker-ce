@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include "FM4SineTable.h"
+#include "FM4292.h"
 
 namespace fm4 {
 constexpr float kSampleRate = 44100.0f;
@@ -109,8 +110,8 @@ public:
     float outputGain=0.7f;  // Master gain AFTER fold/saturation and final stage.
     float foldDrive=1.0f;   // Static trim before folding, not an additional VCA.
     int outputMode=0;       // 0 VCA (original response), 1 LPG, 2 LPF
-    float stageCutoff=0.8f; // Overall brightness for LPF / LPG
-    float stageEnvDepth=0.8f; // Carrier-envelope contribution to cutoff
+    float stageCutoff=0.8f; // LED brightness for LPF/LPG (native macro parameter 51)
+    float stageEnvDepth=0.8f; // Carrier-envelope contribution to vactrol drive
     float lpgResponse=0.45f; // 0 fast, 1 slower vactrol-like closing
     float outputDrive=0.0f;  // 0..1, bypass at 0
     float outputFold=0.0f;   // 0..1, bypass at 0
@@ -126,8 +127,7 @@ public:
         velocity_=std::clamp(vel,0.0f,1.0f);
         if(legato && active()) return;
         feedbackSamples_.fill(0.0f);
-        filterState_=0.0f;
-        lpgEnvelope_=0.0f;
+        lowpassGate_.reset();
         for(auto& r:rt_) { r.phase=0.0f; r.envelope=0.0f; r.stage=Stage::Attack; }
     }
     void noteOff() {
@@ -157,26 +157,10 @@ public:
         float carrierNorm=0.0f;
         for(int i=0;i<4;++i) if(routing.carriers&(1<<i)) carrierNorm+=op[i].level;
         const float carrierScale=1.0f/(std::max(0.8f,carrierNorm));
-        // Compute filter coefficient once per block. The voice-local envelope is
-        // smoothed at audio rate, and the filter follows at block boundaries.
-        float carrierEnv=0.0f;
-        for(int i=0;i<4;++i) if(routing.carriers&(1<<i))
-            carrierEnv+=rt_[i].envelope*op[i].level;
-        carrierEnv/=std::max(0.8f,carrierNorm);
-        const float responseSeconds=0.005f + 0.22f*std::clamp(lpgResponse,0.0f,1.0f);
-        const float slew=1.0f/(1.0f+responseSeconds*kSampleRate);
-        if(outputMode==1) {
-            const float target=std::clamp(carrierEnv,0.0f,1.0f);
-            // Closing is slowed; opening is quicker to retain transient impact.
-            lpgEnvelope_+=(target-lpgEnvelope_)*std::min(1.0f,slew*frames*(target>lpgEnvelope_?8.0f:1.0f));
-        } else lpgEnvelope_=carrierEnv;
-        const float envForFilter=(outputMode==1 ? lpgEnvelope_ : carrierEnv);
-        const float cutControl=std::clamp(stageCutoff,0.0f,1.0f);
-        const float envDepth=std::clamp(stageEnvDepth,0.0f,1.0f);
-        const float shapedEnv=(1.0f-envDepth) + envDepth*std::clamp(envForFilter,0.0f,1.0f);
-        const float hz=60.0f*std::exp2(8.05f*cutControl*shapedEnv);
-        const float omega=kTwoPi*std::min(hz,19000.0f)/kSampleRate;
-        const float filterAlpha=omega/(1.0f+omega);
+        // Shared 292-style optoresistance; these controls remain native macros.
+        // All four carrier ADSRs drive the optical state at AUDIO rate, not at
+        // block boundaries. Each voice has its own capacitor and vactrol state.
+        lowpassGate_.configure(outputMode,stageCutoff,stageEnvDepth,lpgResponse);
         for(std::size_t n=0;n<frames;++n) {
             float generated[4]{};
             // No recursive graph: OP4 calculated first, OP1 last.
@@ -210,12 +194,12 @@ public:
                 const float saturated=x/(1.0f+std::fabs(x));
                 sample=sample+(saturated-sample)*mix;
             }
-            if(outputMode!=0) {
-                filterState_+=filterAlpha*(sample-filterState_);
-                sample=filterState_;
-                // No second envelope VCA: carrier envelopes already shape audio.
-                // LPG differs from LPF through vactrol-like cutoff lag.
-            }
+            float carrierEnvelope=0.0f;
+            for(int i=0;i<4;++i) if(routing.carriers&(1<<i))
+                carrierEnvelope+=rt_[i].envelope*op[i].level;
+            carrierEnvelope=std::clamp(carrierEnvelope / std::max(0.8f,carrierNorm)
+                                       *velocity_,0.0f,1.0f);
+            sample=lowpassGate_.process(sample,carrierEnvelope);
             out[n]=std::clamp(sample*outputGain,-1.0f,1.0f);
         }
     }
@@ -224,8 +208,7 @@ private:
     int note_=60;
     float velocity_=1.0f;
     std::array<float,4> feedbackSamples_{};
-    float filterState_=0.0f;
-    float lpgEnvelope_=0.0f;
+    Vactrol292 lowpassGate_{};
 
     static void advanceEnvelope(Runtime& r, const Operator& p) {
         switch(r.stage) {
