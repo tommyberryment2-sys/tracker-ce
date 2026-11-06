@@ -1,0 +1,35 @@
+name: Build FM4 Tracker Mini
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  mini:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Host regression tests
+        run: |
+          python3 tests/test_badges.py
+          python3 tests/test_integration.py
+          c++ -std=c++20 -O2 -Wall -Wextra -Werror tests/test_dsp.cpp -o /tmp/fm4-test
+          /tmp/fm4-test
+      - name: Integrate FM4 with Tracker CE source
+        run: python3 fm4/apply_fm4.py
+      - name: Install GNU Arm Toolchain 10.3
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget bzip2 make python3
+          wget -q https://developer.arm.com/-/media/Files/downloads/gnu-rm/10.3-2021.10/gcc-arm-none-eabi-10.3-2021.10-x86_64-linux.tar.bz2
+          mkdir -p agt/10.3
+          tar -xjf gcc-arm-none-eabi-10.3-2021.10-x86_64-linux.tar.bz2 -C agt/10.3 --strip-components=1
+      - name: Compile Tracker Mini firmware
+        run: make mini
+      - name: Upload firmware after successful build
+        uses: actions/upload-artifact@v4
+        with:
+          name: FM4-TrackerMini-ptf
+          path: build/TrackerMini_*.ptf
+          if-no-files-found: error
