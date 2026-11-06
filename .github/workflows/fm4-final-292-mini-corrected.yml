@@ -1,0 +1,75 @@
+name: Build FM4 Final 292 Tracker Mini
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  mini:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Stage working FM4 v1.1 baseline and final 292 model
+        shell: bash
+        run: |
+          set -euo pipefail
+          # This workflow only modifies its temporary Actions checkout.
+          # The user's previously working firmware and GitHub workflows are not changed.
+          # GitHub browser upload placed final 292 source files at repository root.
+          # Read them from their verified committed locations.
+          for f in FM4SineTable.h FM4SynthVoice.h; do
+            test -s "$f"
+            cp "$f" core/synth/engines/
+          done
+          for f in fm4_80x28_L2.h fm4_108x40_L2.h; do
+            test -s "$f"
+            cp "$f" core/libs/images/
+          done
+          for f in test_badges.py test_integration.py test_dsp.cpp test_v11.cpp test_output_modes.cpp; do
+            test -s "$f"
+            cp "$f" tests/
+          done
+          test -s apply_fm4.py
+          cp apply_fm4.py fm4/apply_fm4.py
+          for f in FM4292.h FM4DSP.h FM4SynthVoice.cpp; do
+            test -s "$f"
+            cp "$f" core/synth/engines/
+          done
+          test -s test_292.cpp
+          cp test_292.cpp tests/test_292.cpp
+          grep -q 'Vactrol292 lowpassGate_' core/synth/engines/FM4DSP.h
+          grep -q 'kLpgResponse' core/synth/engines/FM4SynthVoice.cpp
+          if grep -q 'kLpgGateCoupling' core/synth/engines/FM4SynthVoice.cpp; then
+            echo 'ERROR: old incomplete LPG fix parameter present; expected v1.1 metadata' >&2
+            exit 1
+          fi
+      - name: Run all FM4 host regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/test_badges.py
+          python3 tests/test_integration.py
+          for target in test_dsp test_v11 test_output_modes test_292; do
+            c++ -std=c++20 -O2 -Wall -Wextra -Werror "tests/${target}.cpp" -o "/tmp/${target}"
+            "/tmp/${target}"
+          done
+      - name: Apply FM4 integration to Polyend CE
+        run: python3 fm4/apply_fm4.py
+      - name: Install pinned GNU Arm toolchain 10.3
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y wget bzip2 make python3
+          wget -q https://developer.arm.com/-/media/Files/downloads/gnu-rm/10.3-2021.10/gcc-arm-none-eabi-10.3-2021.10-x86_64-linux.tar.bz2
+          mkdir -p agt/10.3
+          tar -xjf gcc-arm-none-eabi-10.3-2021.10-x86_64-linux.tar.bz2 -C agt/10.3 --strip-components=1
+      - name: Compile Tracker Mini firmware
+        run: make mini
+      - name: Publish firmware only on successful build
+        uses: actions/upload-artifact@v4
+        with:
+          name: FM4-Final-292-TrackerMini-ptf
+          path: build/TrackerMini_*.ptf
+          if-no-files-found: error
