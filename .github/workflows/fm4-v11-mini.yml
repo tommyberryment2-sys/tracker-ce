@@ -12,8 +12,24 @@ jobs:
           fetch-depth: 0
       - name: Apply FM4 v1.1 sources to runner only
         run: |
-          cp -R fm4/v11/overlay/. .
-          echo "v1 sources preserved in GitHub; overlay applied only to this build"
+          set -eu
+          # The files were uploaded to the fork's root, not fm4/v11/overlay/.
+          # Copy them only inside the temporary Actions checkout.
+          for f in FM4DSP.h FM4SineTable.h FM4SynthVoice.cpp FM4SynthVoice.h; do
+            test -s "$f"
+            cp "$f" core/synth/engines/
+          done
+          for f in fm4_80x28_L2.h fm4_108x40_L2.h; do
+            test -s "$f"
+            cp "$f" core/libs/images/
+          done
+          for f in test_badges.py test_integration.py test_dsp.cpp test_v11.cpp test_output_modes.cpp; do
+            test -s "$f"
+            cp "$f" tests/
+          done
+          test -s apply_fm4.py
+          cp apply_fm4.py fm4/apply_fm4.py
+          echo "FM4 v1.1 sources installed on temporary Actions runner"
       - name: Host regression tests
         run: |
           python3 tests/test_badges.py
