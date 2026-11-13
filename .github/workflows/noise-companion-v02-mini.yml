@@ -1,0 +1,79 @@
+name: Build FM4 + Noise Companion DEV v0.2
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  mini:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Stage working FM4 final 292 implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in FM4292.h FM4DSP.h FM4SineTable.h FM4SynthVoice.h FM4SynthVoice.cpp; do
+            test -s "$f"
+            cp "$f" core/synth/engines/
+          done
+          for f in fm4_80x28_L2.h fm4_108x40_L2.h; do
+            test -s "$f"
+            cp "$f" core/libs/images/
+          done
+          test -s apply_fm4.py
+          cp apply_fm4.py fm4/apply_fm4.py
+          grep -q 'Vactrol292 lowpassGate_' core/synth/engines/FM4DSP.h
+      - name: Stage Noise Companion v0.2 files
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in NoiseCompanionCore.h NoiseCompanionDevDSP.h NoiseCompanionVoice.h NoiseCompanionVoice.cpp; do
+            test -s "$f"
+            cp "$f" core/synth/engines/
+          done
+          for f in noise_lab_80x28_L2.h noise_lab_108x40_L2.h; do
+            test -s "$f"
+            cp "$f" core/libs/images/
+          done
+          test -s apply_noise_companion.py
+          test -s test_noise_v02.cpp
+          grep -q 'kParamCount == 59' core/synth/engines/NoiseCompanionCore.h
+      - name: Host regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          c++ -std=c++20 -O2 -Wall -Wextra -Werror test_noise_v02.cpp -o /tmp/test_noise_v02
+          /tmp/test_noise_v02
+          for t in test_dsp test_v11 test_output_modes test_292; do
+            test -s "${t}.cpp"
+            c++ -std=c++20 -O2 -Wall -Wextra -Werror "${t}.cpp" -o "/tmp/${t}"
+            "/tmp/${t}"
+          done
+      - name: Register FM4 and Noise Companion into temporary checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 fm4/apply_fm4.py
+          python3 apply_noise_companion.py
+          grep -q kNoiseCompanionDevSynth synth/include/PolySynth/config.h
+          grep -q createFM4Synth core/synth/registry.cpp
+          grep -q createNoiseCompanionDevSynth core/synth/registry.cpp
+      - name: Install pinned ARM toolchain 10.3
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y wget bzip2 make python3
+          wget -q https://developer.arm.com/-/media/Files/downloads/gnu-rm/10.3-2021.10/gcc-arm-none-eabi-10.3-2021.10-x86_64-linux.tar.bz2
+          mkdir -p agt/10.3
+          tar -xjf gcc-arm-none-eabi-10.3-2021.10-x86_64-linux.tar.bz2 -C agt/10.3 --strip-components=1
+      - name: Compile Tracker Mini firmware
+        run: make mini
+      - name: Publish DEVELOPMENT artifact only on successful build
+        uses: actions/upload-artifact@v4
+        with:
+          name: FM4-NoiseCompanion-DEV-v02-TrackerMini-ptf
+          path: build/TrackerMini_*.ptf
+          if-no-files-found: error
