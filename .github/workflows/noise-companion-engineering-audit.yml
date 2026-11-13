@@ -1,0 +1,45 @@
+name: Noise Companion - 30 Program Audit and 3320 DSP Prototype
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stage independent experimental sources (no firmware edits)
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/nplv03/{src,tests,tools}
+          for f in NoiseCompanion3320Filter.h NoiseCompanionCore3320Experiment.h NoiseCompanionProgramCatalog.h; do
+            test -s "$f"
+            cp "$f" /tmp/nplv03/src/
+          done
+          for t in filter core catalog; do
+            test -s "test_npl3320_${t}.cpp"
+            cp "test_npl3320_${t}.cpp" "/tmp/nplv03/tests/test_${t}.cpp"
+          done
+          cp test_npl3320_audit.py /tmp/nplv03/tests/test_audit.py
+          cp audit_noise_sources.py /tmp/nplv03/tools/audit_noise_sources.py
+      - name: Host tests, filter sweep and independent program selectors
+        run: |
+          set -euo pipefail
+          cd /tmp/nplv03
+          for t in filter core catalog; do
+            c++ -std=c++20 -O2 -Wall -Wextra -Werror "tests/test_${t}.cpp" -o "/tmp/${t}_npl_v03"
+            "/tmp/${t}_npl_v03"
+          done
+          python3 tests/test_audit.py
+      - name: Inspect original 30 source files, licenses and DSP dependencies
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/Befaco/Noise_plethora.git /tmp/Noise_plethora_original
+          python3 /tmp/nplv03/tools/audit_noise_sources.py /tmp/Noise_plethora_original /tmp/nplv03/reports
+          git -C /tmp/Noise_plethora_original rev-parse HEAD > /tmp/nplv03/reports/source_commit.txt
+      - name: Upload source audit metadata (no proprietary/third-party code)
+        uses: actions/upload-artifact@v4
+        with:
+          name: NoiseCompanion-v03-source-audit
+          path: /tmp/nplv03/reports/
+          if-no-files-found: error
