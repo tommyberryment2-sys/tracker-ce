@@ -46,9 +46,15 @@ jobs:
           set -euo pipefail
           c++ -std=c++20 -O2 -Wall -Wextra -Werror test_noise_v02.cpp -o /tmp/test_noise_v02
           /tmp/test_noise_v02
+          # The legacy tests are uploaded at repository root, but their
+          # ../core/... includes require their source path to be tests/.
+          # Stage them in the CI checkout; do not change the fork's files.
+          mkdir -p tests
+          test -s core/synth/engines/FM4DSP.h
           for t in test_dsp test_v11 test_output_modes test_292; do
             test -s "${t}.cpp"
-            c++ -std=c++20 -O2 -Wall -Wextra -Werror "${t}.cpp" -o "/tmp/${t}"
+            cp "${t}.cpp" "tests/${t}.cpp"
+            c++ -std=c++20 -O2 -Wall -Wextra -Werror "tests/${t}.cpp" -o "/tmp/${t}"
             "/tmp/${t}"
           done
       - name: Register FM4 and Noise Companion into temporary checkout
